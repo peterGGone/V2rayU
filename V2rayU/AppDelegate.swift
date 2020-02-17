@@ -12,6 +12,9 @@ import ServiceManagement
 let launcherAppIdentifier = "net.yanue.V2rayU.Launcher"
 let appVersion = getAppVersion()
 
+let NOTIFY_TOGGLE_RUNNING_SHORTCUT = Notification.Name(rawValue: "NOTIFY_TOGGLE_RUNNING_SHORTCUT")
+let NOTIFY_SWITCH_PROXY_MODE_SHORTCUT = Notification.Name(rawValue: "NOTIFY_SWITCH_PROXY_MODE_SHORTCUT")
+
 @NSApplicationMain
 class AppDelegate: NSObject, NSApplicationDelegate {
     // bar menu
@@ -34,6 +37,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.checkDefault()
 
+        // auto Clear Logs
+        if UserDefaults.getBool(forKey: .autoClearLog) {
+            print("ClearLogs")
+            V2rayLaunch.ClearLogs()
+        }
+
         // check v2ray core
         V2rayCore().check()
         // generate plist
@@ -52,6 +61,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(onWakeNote(note:)), name: NSWorkspace.didWakeNotification, object: nil)
         // url scheme
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(self.handleAppleEvent(event:replyEvent:)), forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+
+        let path = Bundle.main.bundlePath
+        // /Users/yanue/Library/Developer/Xcode/DerivedData/V2rayU-cqwhqdwsnxsplqgolfwfywalmjps/Build/Products/Debug
+        // working dir must be: /Applications/V2rayU.app
+        NSLog(String.init(format: "working dir:%@", path))
+
+        if !(path.contains("Developer/Xcode") || path.contains("/Applications/V2rayU.app")) {
+            makeToast(message: "Please drag 'V2rayU' to '/Applications' directory", displayDuration: 5.0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.5) {
+                NSApplication.shared.terminate(self)
+            }
+        }
+
+        // set global hotkey
+        let notifyCenter = NotificationCenter.default
+        notifyCenter.addObserver(forName: NOTIFY_TOGGLE_RUNNING_SHORTCUT, object: nil, queue: nil, using: {
+            notice in
+            ToggleRunning()
+        })
+
+        notifyCenter.addObserver(forName: NOTIFY_SWITCH_PROXY_MODE_SHORTCUT, object: nil, queue: nil, using: {
+            notice in
+            SwitchProxyMode()
+        })
+
+        // Register global hotkey
+        ShortcutsController.bindShortcuts()
     }
 
     func checkDefault() {
@@ -59,11 +95,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.set(forKey: .v2rayCoreVersion, value: V2rayCore.version)
         }
         if UserDefaults.get(forKey: .autoCheckVersion) == nil {
-            UserDefaults.setBool(forKey: .v2rayCoreVersion, value: true)
+            UserDefaults.setBool(forKey: .autoCheckVersion, value: true)
         }
         if UserDefaults.get(forKey: .autoLaunch) == nil {
             SMLoginItemSetEnabled(launcherAppIdentifier as CFString, true)
-            UserDefaults.setBool(forKey: .v2rayCoreVersion, value: true)
+            UserDefaults.setBool(forKey: .autoLaunch, value: true)
         }
         if UserDefaults.get(forKey: .runMode) == nil {
             UserDefaults.set(forKey: .runMode, value: RunMode.manual.rawValue)
@@ -88,6 +124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func onWakeNote(note: NSNotification) {
+        print("onWakeNote")
         if UserDefaults.getBool(forKey: .v2rayTurnOn) {
             V2rayLaunch.Start()
         }
@@ -98,6 +135,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // check version
             V2rayUpdater.checkForUpdatesInBackground()
         }
+        // auto update subscribe servers
+        V2raySubSync().sync()
+        // ping
+        menuController.pingAtLaunch()
     }
 
     @objc func onSleepNote(note: NSNotification) {
@@ -105,6 +146,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
+        // unregister All shortcut
+        MASShortcutMonitor.shared().unregisterAllShortcuts()
         // Insert code here to tear down your application
         V2rayLaunch.Stop()
         // restore system proxy

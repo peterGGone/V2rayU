@@ -28,7 +28,7 @@ final class PreferenceAdvanceViewController: NSViewController, PreferencePane {
     @IBOutlet weak var logLevel: NSPopUpButton!
     @IBOutlet weak var dnsServers: NSTextField!
     @IBOutlet weak var tips: NSTextField!
-    
+
     override var nibName: NSNib.Name? {
         return "PreferenceAdvance"
     }
@@ -51,7 +51,7 @@ final class PreferenceAdvanceViewController: NSViewController, PreferencePane {
         let muxConcurrent = UserDefaults.get(forKey: .muxConcurrent) ?? "8"
 
         // select item
-        print("host",localSockHost,localHttpHost)
+        print("host", localSockHost, localHttpHost)
         self.logLevel.selectItem(withTitle: UserDefaults.get(forKey: .v2rayLogLevel) ?? "info")
 
         self.enableUdp.state = enableUdpState ? .on : .off
@@ -81,7 +81,7 @@ final class PreferenceAdvanceViewController: NSViewController, PreferencePane {
 
         let dnsServersVal = self.dnsServers.stringValue
         let muxConcurrentVal = self.muxConcurrent.intValue
-        
+
         // save
         UserDefaults.setBool(forKey: .enableUdp, value: enableUdpVal)
         UserDefaults.setBool(forKey: .enableMux, value: enableMuxVal)
@@ -93,12 +93,12 @@ final class PreferenceAdvanceViewController: NSViewController, PreferencePane {
         UserDefaults.set(forKey: .localPacPort, value: pacPortVal)
         UserDefaults.set(forKey: .dnsServers, value: dnsServersVal)
         UserDefaults.set(forKey: .muxConcurrent, value: String(muxConcurrentVal))
-        print("self.sockHost.stringValue",self.sockHost.stringValue)
+        print("self.sockHost.stringValue", self.sockHost.stringValue)
 
         var logLevelName = "info"
-        
+
         if let logLevelVal = self.logLevel.selectedItem {
-            print("logLevelVal",logLevelVal)
+            print("logLevelVal", logLevelVal)
             logLevelName = logLevelVal.title
             UserDefaults.set(forKey: .v2rayLogLevel, value: logLevelVal.title)
         }
@@ -112,27 +112,18 @@ final class PreferenceAdvanceViewController: NSViewController, PreferencePane {
         v2rayConfig.logLevel = logLevelName
 
         // set current server item and reload v2ray-core
-        let item = V2rayServer.loadSelectedItem()
-        if item != nil {
-            // parse json
-            v2rayConfig.parseJson(jsonText: item!.json)
-            // combine with new settings and save
-            _ = V2rayServer.save(idx: V2rayServer.getIndex(name: item!.name), isValid: v2rayConfig.isValid, jsonData: v2rayConfig.combineManual())
-            // restart service
-            menuController.startV2rayCore()
-            // todo reload configWindow
-        }
+        regenerateAllConfig()
 
         // set HttpServerPacPort
         HttpServerPacPort = pacPortVal
-        PACUrl = "http://127.0.0.1:" + String(HttpServerPacPort) + "/pac/proxy.pac"
+        PACUrl = "http://127.0.0.1:" + String(HttpServerPacPort) + "/pac/proxy.js"
 
-        _ = GeneratePACFile()
+        _ = GeneratePACFile(rewrite: true)
         // restart pac http server
         V2rayLaunch.startHttpServer()
-        
+
         self.tips.stringValue = "save success."
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             // your code here
             self.tips.stringValue = ""

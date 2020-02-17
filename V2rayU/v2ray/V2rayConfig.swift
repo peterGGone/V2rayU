@@ -11,49 +11,58 @@ import SwiftyJSON
 import JavaScriptCore
 
 let jsSourceFormatConfig =
-    """
-    /**
-     * V2ray Config Format
-     * @return {string}
-     */
-    var V2rayConfigFormat = function (encodeStr) {
-        var deStr = decodeURIComponent(encodeStr);
-        if (!deStr) {
-            return "error: cannot decode uri"
-        }
-
-        try {
-            var obj = JSON.parse(deStr);
-            if (!obj) {
-                return "error: cannot parse json"
+        """
+        /**
+         * V2ray Config Format
+         * @return {string}
+         */
+        var V2rayConfigFormat = function (encodeStr) {
+            var deStr = decodeURIComponent(encodeStr);
+            if (!deStr) {
+                return "error: cannot decode uri"
             }
 
-            var v2rayConfig = {};
-            // ordered keys
-            v2rayConfig["log"] = obj.log;
-            v2rayConfig["inbounds"] = obj.inbounds;
-            v2rayConfig["inbound"] = obj.inbound;
-            v2rayConfig["inboundDetour"] = obj.inboundDetour;
-            v2rayConfig["outbounds"] = obj.outbounds;
-            v2rayConfig["outbound"] = obj.outbound;
-            v2rayConfig["outboundDetour"] = obj.outboundDetour;
-            v2rayConfig["api"] = obj.api;
-            v2rayConfig["dns"] = obj.dns;
-            v2rayConfig["stats"] = obj.stats;
-            v2rayConfig["routing"] = obj.routing;
-            v2rayConfig["policy"] = obj.policy;
-            v2rayConfig["reverse"] = obj.reverse;
-            v2rayConfig["transport"] = obj.transport;
-            
-            return JSON.stringify(v2rayConfig, null, 2);
-        } catch (e) {
-            console.log("error", e);
-            return "error: " + e.toString()
-        }
-    };
-    """
+            try {
+                var obj = JSON.parse(deStr);
+                if (!obj) {
+                    return "error: cannot parse json"
+                }
+
+                var v2rayConfig = {};
+                // ordered keys
+                v2rayConfig["log"] = obj.log;
+                v2rayConfig["inbounds"] = obj.inbounds;
+                v2rayConfig["inbound"] = obj.inbound;
+                v2rayConfig["inboundDetour"] = obj.inboundDetour;
+                v2rayConfig["outbounds"] = obj.outbounds;
+                v2rayConfig["outbound"] = obj.outbound;
+                v2rayConfig["outboundDetour"] = obj.outboundDetour;
+                v2rayConfig["api"] = obj.api;
+                v2rayConfig["dns"] = obj.dns;
+                v2rayConfig["stats"] = obj.stats;
+                v2rayConfig["routing"] = obj.routing;
+                v2rayConfig["policy"] = obj.policy;
+                v2rayConfig["reverse"] = obj.reverse;
+                v2rayConfig["transport"] = obj.transport;
+                
+                return JSON.stringify(v2rayConfig, null, 2);
+            } catch (e) {
+                console.log("error", e);
+                return "error: " + e.toString()
+            }
+        };
+        """
+
 
 class V2rayConfig: NSObject {
+    // routing rule tag
+    enum RoutingRule: Int {
+        case RoutingRuleGlobal = 0 // Global
+        case RoutingRuleLAN = 1 // Bypassing the LAN Address
+        case RoutingRuleCn = 2 // Bypassing mainland address
+        case RoutingRuleLANAndCn = 3 // Bypassing LAN and mainland address
+    }
+
     var v2ray: V2rayStruct = V2rayStruct()
     var isValid = false
     var isNewVersion = true
@@ -94,6 +103,15 @@ class V2rayConfig: NSObject {
     var streamTlsAllowInsecure = true
     var streamTlsServerName = ""
 
+    var routingDomainStrategy: V2rayRoutingSetting.domainStrategy = .AsIs
+    var routingRule: RoutingRule = .RoutingRuleGlobal
+    let routingProxyDomains = UserDefaults.getArray(forKey: .routingProxyDomains) ?? [];
+    let routingProxyIps = UserDefaults.getArray(forKey: .routingProxyIps) ?? [];
+    let routingDirectDomains = UserDefaults.getArray(forKey: .routingDirectDomains) ?? [];
+    let routingDirectIps = UserDefaults.getArray(forKey: .routingDirectIps) ?? [];
+    let routingBlockDomains = UserDefaults.getArray(forKey: .routingBlockDomains) ?? [];
+    let routingBlockIps = UserDefaults.getArray(forKey: .routingBlockIps) ?? [];
+
     private var foundHttpPort = false
     private var foundSockPort = false
     private var foundServerProtocol = false
@@ -114,6 +132,10 @@ class V2rayConfig: NSObject {
         self.mux = Int(UserDefaults.get(forKey: .muxConcurrent) ?? "8") ?? 8
 
         self.logLevel = UserDefaults.get(forKey: .v2rayLogLevel) ?? "info"
+
+        // routing
+        self.routingDomainStrategy = V2rayRoutingSetting.domainStrategy(rawValue: UserDefaults.get(forKey: .routingDomainStrategy) ?? "AsIs") ?? .AsIs
+        self.routingRule = RoutingRule(rawValue: Int(UserDefaults.get(forKey: .routingRule) ?? "0") ?? 0) ?? .RoutingRuleGlobal
     }
 
     // combine manual edited data
@@ -160,17 +182,22 @@ class V2rayConfig: NSObject {
     func combineManualData() {
         // base
         self.v2ray.log.loglevel = V2rayLog.logLevel(rawValue: UserDefaults.get(forKey: .v2rayLogLevel) ?? "info") ?? V2rayLog.logLevel.info
-        self.v2ray.dns.servers = self.dns.components(separatedBy: ",")
+        if self.dns.count > 0 {
+            self.v2ray.dns.servers = self.dns.components(separatedBy: ",")
+        }
         // ------------------------------------- inbound start ---------------------------------------------
         var inHttp = V2rayInbound()
         inHttp.port = self.httpPort
         inHttp.listen = self.httpHost
         inHttp.protocol = V2rayProtocolInbound.http
+        inHttp.sniffing = V2rayInboundSniffing()
+
         var inSocks = V2rayInbound()
         inSocks.port = self.socksPort
         inSocks.listen = self.socksHost
         inSocks.protocol = V2rayProtocolInbound.socks
         inSocks.settingSocks.udp = self.enableUdp
+        inSocks.sniffing = V2rayInboundSniffing()
 
         if self.httpPort == self.socksPort {
             self.httpPort = String((Int(self.socksPort) ?? 0) + 1)
@@ -178,24 +205,17 @@ class V2rayConfig: NSObject {
 
         if self.isNewVersion {
             // inbounds
+            var inbounds: [V2rayInbound] = [inSocks, inHttp]
             if (!self.isEmptyInput && self.v2ray.inbounds != nil && self.v2ray.inbounds!.count > 0) {
-                var inbounds: [V2rayInbound] = []
                 for var (_, item) in self.v2ray.inbounds!.enumerated() {
-                    if item.protocol == V2rayProtocolInbound.http {
-                        item.port = self.httpPort.count > 0 ? self.httpPort : "1087"
-                        item.listen = self.httpHost.count > 0 ? self.httpHost : "127.0.0.1"
-                    }
-                    if item.protocol == V2rayProtocolInbound.socks {
-                        item.port = self.socksPort.count > 0 ? self.socksPort : "1080"
-                        item.listen = self.socksHost.count > 0 ? self.socksHost : "127.0.0.1"
-                        item.settingSocks.udp = self.enableUdp
+                    if item.protocol == V2rayProtocolInbound.http || item.protocol == V2rayProtocolInbound.socks {
+                        continue
                     }
                     inbounds.append(item)
                 }
                 self.v2ray.inbounds = inbounds
             } else {
                 // new add
-                let inbounds: [V2rayInbound] = [inSocks, inHttp]
                 self.v2ray.inbounds = inbounds
             }
             self.v2ray.inboundDetour = nil
@@ -224,14 +244,12 @@ class V2rayConfig: NSObject {
                 var inboundDetour: [V2rayInbound] = []
 
                 for var (_, item) in self.v2ray.inboundDetour!.enumerated() {
-                    if item.protocol == V2rayProtocolInbound.http {
-                        item.port = self.httpPort
-                        item.listen = self.httpHost
+                    item.sniffing = V2rayInboundSniffing()
+                    if inType == V2rayProtocolInbound.http && item.protocol == V2rayProtocolInbound.http {
+                        continue
                     }
-                    if item.protocol == V2rayProtocolInbound.socks {
-                        item.port = self.socksPort
-                        item.listen = self.socksHost
-                        item.settingSocks.udp = self.enableUdp
+                    if inType == V2rayProtocolInbound.socks && item.protocol == V2rayProtocolInbound.socks {
+                        continue
                     }
                     inboundDetour.append(item)
                 }
@@ -258,7 +276,7 @@ class V2rayConfig: NSObject {
         // outbound Blackhole
         var outboundBlackhole = V2rayOutbound()
         outboundBlackhole.protocol = V2rayProtocolOutbound.blackhole
-        outboundBlackhole.tag = "blockout"
+        outboundBlackhole.tag = "block"
         outboundBlackhole.settingBlackhole = V2rayOutboundBlackhole()
 
         // outbound
@@ -310,6 +328,82 @@ class V2rayConfig: NSObject {
         }
 
         // ------------------------------------- outbound end ---------------------------------------------
+
+        // ------------------------------------- routing start --------------------------------------------
+
+        self.routing.settings.domainStrategy = self.routingDomainStrategy
+        var rules: [V2rayRoutingSettingRule] = []
+
+        // proxy
+        var routingProxy: V2rayRoutingSettingRule?
+        if self.routingProxyDomains.count > 0 || self.routingProxyIps.count > 0 {
+            routingProxy = V2rayRoutingSettingRule()
+            // tag is proxy
+            routingProxy?.outboundTag = "proxy"
+            routingProxy?.domain = self.routingProxyDomains
+            routingProxy?.ip = self.routingProxyIps
+        }
+
+        // direct
+        var routingDirect: V2rayRoutingSettingRule?
+        if self.routingDirectDomains.count > 0 || self.routingDirectIps.count > 0 {
+            routingDirect = V2rayRoutingSettingRule()
+            // tag is proxy
+            routingDirect?.outboundTag = "direct"
+            routingDirect?.domain = self.routingDirectDomains
+            routingDirect?.ip = self.routingDirectIps
+        }
+
+        // block
+        var routingBlock: V2rayRoutingSettingRule?
+        if self.routingBlockDomains.count > 0 || self.routingBlockIps.count > 0 {
+            routingBlock = V2rayRoutingSettingRule()
+            // tag is proxy
+            routingBlock?.outboundTag = "block"
+            routingBlock?.domain = self.routingBlockDomains
+            routingBlock?.ip = self.routingBlockIps
+        }
+
+        if routingDirect == nil {
+            routingDirect = V2rayRoutingSettingRule()
+            // tag is proxy
+            routingDirect?.outboundTag = "direct"
+        }
+
+        switch self.routingRule {
+        case .RoutingRuleGlobal:
+            // all set to null
+            routingProxy = nil
+            routingDirect = nil
+            routingBlock = nil
+
+        case .RoutingRuleLAN:
+            routingDirect?.ip?.append("geoip:private")
+
+        case .RoutingRuleCn:
+            routingDirect?.ip?.append("geoip:cn")
+            routingDirect?.domain?.append("geosite:cn")
+
+        case .RoutingRuleLANAndCn:
+            routingDirect?.ip?.append("geoip:private")
+            routingDirect?.ip?.append("geoip:cn")
+            routingDirect?.domain?.append("geosite:cn")
+        }
+
+        if routingProxy != nil {
+            rules.append(routingProxy!)
+        }
+        if routingDirect != nil {
+            rules.append(routingDirect!)
+        }
+        if routingBlock != nil {
+            rules.append(routingBlock!)
+        }
+
+        self.routing.settings.rules = rules
+        // set v2ray routing
+        self.v2ray.routing = self.routing
+        // ------------------------------------- routing end ----------------------------------------------
     }
 
     private func replaceOutbound(item: V2rayOutbound) -> V2rayOutbound {
@@ -400,11 +494,11 @@ class V2rayConfig: NSObject {
             }
             break
         case V2rayProtocolOutbound.socks.rawValue:
-            if self.serverSocks5.address.count == 0 {
+            if self.serverSocks5.servers[0].address.count == 0 {
                 self.error = "missing socks.address";
                 return
             }
-            if self.serverSocks5.port.count == 0 {
+            if self.serverSocks5.servers[0].port.count == 0 {
                 self.error = "missing socks.port";
                 return
             }
@@ -432,7 +526,7 @@ class V2rayConfig: NSObject {
     private func getOutbound() -> V2rayOutbound {
         var outbound = V2rayOutbound()
         outbound.protocol = V2rayProtocolOutbound(rawValue: self.serverProtocol)!
-        outbound.tag = "agentout"
+        outbound.tag = "proxy"
 
         switch outbound.protocol {
         case V2rayProtocolOutbound.vmess:
@@ -467,7 +561,7 @@ class V2rayConfig: NSObject {
     private func getStreamSettings() -> V2rayStreamSettings {
         // streamSettings
         var streamSettings = V2rayStreamSettings()
-        streamSettings.network = V2rayStreamSettings.network(rawValue: self.streamNetwork)!
+        streamSettings.network = V2rayStreamSettings.network(rawValue: self.streamNetwork) ?? V2rayStreamSettings.network.tcp
         switch streamSettings.network {
         case .tcp:
             streamSettings.tcpSettings = self.streamTcp
@@ -597,84 +691,7 @@ class V2rayConfig: NSObject {
         }
         // ------------ parse outbound end -------------------------------------------
 
-        if json["routing"].dictionaryValue.count > 0 {
-            v2ray.routing = self.parseRouting(jsonParams: json["routing"]);
-        }
-
         v2ray.transport = self.parseTransport(steamJson: json["transport"])
-    }
-
-    func parseRouting(jsonParams: JSON) -> (V2rayRouting) {
-        var routing = V2rayRouting()
-        routing.settings.rules = []
-
-        if jsonParams["strategy"].stringValue.count > 0 {
-            routing.strategy = jsonParams["strategy"].stringValue;
-        }
-
-        if jsonParams["settings"].exists() {
-
-            if (V2rayRoutingSetting.domainStrategy(rawValue: jsonParams["settings"]["domainStrategy"].stringValue) != nil) {
-                routing.settings.domainStrategy = V2rayRoutingSetting.domainStrategy(rawValue: jsonParams["settings"]["domainStrategy"].stringValue)!
-            }
-
-            if jsonParams["settings"]["rules"].arrayValue.count > 0 {
-                for subJson in jsonParams["settings"]["rules"].arrayValue {
-                    var rule = V2rayRoutingSettingRule()
-                    // reset
-                    rule.type = nil;
-                    rule.outboundTag = nil;
-                    rule.domain = nil;
-                    rule.ip = nil;
-
-                    if (subJson["type"].stringValue.count > 0) {
-                        rule.type = subJson["type"].stringValue
-                    }
-                    if (subJson["outboundTag"].stringValue.count > 0) {
-                        rule.outboundTag = subJson["outboundTag"].stringValue
-                    }
-                    if (subJson["domain"].arrayValue.count > 0) {
-                        rule.domain = subJson["domain"].arrayValue.map {
-                            $0.stringValue
-                        }
-                    }
-                    if (subJson["ip"].arrayValue.count > 0) {
-                        rule.ip = subJson["ip"].arrayValue.map {
-                            $0.stringValue
-                        }
-                    }
-                    if (subJson["port"].stringValue.count > 0) {
-                        rule.port = subJson["port"].stringValue
-                    }
-                    if (subJson["network"].stringValue.count > 0) {
-                        rule.network = subJson["network"].stringValue
-                    }
-                    if (subJson["source"].arrayValue.count > 0) {
-                        rule.source = subJson["source"].arrayValue.map {
-                            $0.stringValue
-                        }
-                    }
-                    if (subJson["user"].arrayValue.count > 0) {
-                        rule.user = subJson["user"].arrayValue.map {
-                            $0.stringValue
-                        }
-                    }
-                    if (subJson["inboundTag"].arrayValue.count > 0) {
-                        rule.inboundTag = subJson["inboundTag"].arrayValue.map {
-                            $0.stringValue
-                        }
-                    }
-                    if (subJson["protocol"].arrayValue.count > 0) {
-                        rule.`protocol` = subJson["protocol"].arrayValue.map {
-                            $0.stringValue
-                        }
-                    }
-                    routing.settings.rules.append(rule)
-                }
-            }
-        }
-
-        return routing
     }
 
     // parse inbound from json
@@ -858,7 +875,16 @@ class V2rayConfig: NSObject {
         v2rayOutbound.protocol = V2rayProtocolOutbound(rawValue: jsonParams["protocol"].stringValue)!
 
         v2rayOutbound.sendThrough = jsonParams["sendThrough"].stringValue
-        v2rayOutbound.tag = jsonParams["tag"].stringValue
+
+        // fix Outbound tag
+        switch v2rayOutbound.protocol {
+        case .freedom:
+            v2rayOutbound.tag = "direct"
+        case .blackhole:
+            v2rayOutbound.tag = "block"
+        default:
+            v2rayOutbound.tag = "proxy"
+        }
 
         // settings depends on protocol
         if jsonParams["settings"].dictionaryValue.count > 0 {
@@ -917,8 +943,8 @@ class V2rayConfig: NSObject {
 
             case .socks:
                 var settingSocks = V2rayOutboundSocks()
-                settingSocks.address = jsonParams["settings"]["address"].stringValue
-                settingSocks.port = jsonParams["settings"]["port"].stringValue
+                settingSocks.servers[0].address = jsonParams["settings"]["address"].stringValue
+                settingSocks.servers[0].port = jsonParams["settings"]["port"].stringValue
 
                 var users: [V2rayOutboundSockUser] = []
                 jsonParams["settings"]["users"].arrayValue.forEach { val in
@@ -929,7 +955,7 @@ class V2rayConfig: NSObject {
                     // append
                     users.append(user)
                 }
-                settingSocks.users = users
+                settingSocks.servers[0].users = users
 
                 // set into outbound
                 v2rayOutbound.settingSocks = settingSocks

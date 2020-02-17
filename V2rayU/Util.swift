@@ -55,6 +55,16 @@ extension UserDefaults {
         case muxConcurrent
         // pacPort
         case localPacPort
+
+        // for routing rule
+        case routingDomainStrategy
+        case routingRule
+        case routingProxyDomains
+        case routingProxyIps
+        case routingDirectDomains
+        case routingDirectIps
+        case routingBlockDomains
+        case routingBlockIps
     }
 
     static func setBool(forKey key: KEY, value: Bool) {
@@ -126,6 +136,18 @@ extension String {
         let urlTest = NSPredicate(format: "SELF MATCHES %@", urlRegEx)
         let result = urlTest.evaluate(with: self)
         return result
+    }
+
+    //将原始的url编码为合法的url
+    func urlEncoded() -> String {
+        let encodeUrlString = self.addingPercentEncoding(withAllowedCharacters:
+        .urlQueryAllowed)
+        return encodeUrlString ?? self
+    }
+
+    //将编码后的url转换回原始的url
+    func urlDecoded() -> String {
+        return self.removingPercentEncoding ?? self
     }
 }
 
@@ -238,7 +260,7 @@ func checkTcpPortForListen(port: in_port_t) -> (Bool, descr: String) {
         releaseTcpPort(socket: socketFileDescriptor)
         return (false, "\(port), BindFailed, \(details)")
     }
-    if listen(socketFileDescriptor, SOMAXCONN ) == -1 {
+    if listen(socketFileDescriptor, SOMAXCONN) == -1 {
         let details = descriptionOfLastError()
         releaseTcpPort(socket: socketFileDescriptor)
         return (false, "\(port), ListenFailed, \(details)")
@@ -258,4 +280,21 @@ func descriptionOfLastError() -> String {
 
 func getAppVersion() -> String {
     return "\(Bundle.main.infoDictionary!["CFBundleShortVersionString"] ?? "")"
+}
+
+func shell(_ args: String...) -> String {
+    let task = Process()
+    task.launchPath = "/usr/bin/env"
+    task.arguments = args
+
+    let pipe = Pipe()
+    task.standardOutput = pipe
+
+    task.launch()
+    task.waitUntilExit()
+
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: data, encoding: String.Encoding.utf8)
+
+    return output ?? ""
 }
