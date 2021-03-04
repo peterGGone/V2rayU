@@ -167,23 +167,23 @@ function commit() {
 
 function downloadV2ray() {
     echo "正在查询最新版v2ray ..."
-    rm -fr v2ray-macos.zip v2ray-core
-    tag=$(curl --silent "https://api.github.com/repos/v2ray/v2ray-core/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    rm -fr v2ray-core
+    tag='v4.34.0'
     echo "v2ray-core version: ${tag}"
-    url="https://github.com/v2ray/v2ray-core/releases/download/${tag}/v2ray-macos.zip"
+    url="https://github.com/v2fly/v2ray-core/releases/download/v4.34.0/v2ray-macos-64.zip"
     echo "正在下载最新版v2ray: ${tag}"
-    curl -Lo v2ray-macos.zip ${url}
+#    curl -Lo v2ray-macos-64.zip ${url}
 
-    unzip -o v2ray-macos.zip -d v2ray-core
-    rm -fr v2ray-macos.zip
+    unzip -o v2ray-macos-64.zip -d v2ray-core
 }
 
 function createDmgByAppdmg() {
-    umount "/Volumes/${APP_NAME}"
+#    umount "/Volumes/${APP_NAME}"
 
-    rm -rf ${BUILD_DIR}/${APP_NAME}.app ${BUILD_DIR}/${DMG_FINAL}
-    \cp -Rf "${V2rayU_RELEASE}/${APP_NAME}.app" "${BUILD_DIR}/${APP_NAME}.app"
+#    rm -rf ${BUILD_DIR}/${APP_NAME}.app ${BUILD_DIR}/${DMG_FINAL}
+#    \cp -Rf "${V2rayU_RELEASE}/${APP_NAME}.app" "${BUILD_DIR}/${APP_NAME}.app"
 
+    rm -f  ${BUILD_DIR}/${DMG_FINAL}
     # https://github.com/LinusU/node-appdmg
     # npm install -g appdmg
     echo ${BUILD_DIR}/appdmg.json
@@ -192,7 +192,7 @@ function createDmgByAppdmg() {
     # appcast sign update
     ${AppCastDir}/bin/sign_update ${DMG_FINAL}
 
-    umount "/Volumes/${APP_NAME}"
+#    umount "/Volumes/${APP_NAME}"
 }
 
 function makeDmg() {

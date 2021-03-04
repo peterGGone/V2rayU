@@ -8,6 +8,7 @@
 
 import Cocoa
 import ServiceManagement
+import Swifter
 
 let launcherAppIdentifier = "net.yanue.V2rayU.Launcher"
 let appVersion = getAppVersion()
@@ -20,8 +21,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // bar menu
     @IBOutlet weak var statusMenu: NSMenu!
 
-
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // default settings
+        self.checkDefault()
 
         // auto launch
         if UserDefaults.getBool(forKey: .autoLaunch) {
@@ -35,24 +37,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        self.checkDefault()
-
-        // auto Clear Logs
-        if UserDefaults.getBool(forKey: .autoClearLog) {
-            print("ClearLogs")
-            V2rayLaunch.ClearLogs()
-        }
-
         // check v2ray core
         V2rayCore().check()
-        // generate plist
-        V2rayLaunch.generateLaunchAgentPlist()
+
         // auto check updates
         if UserDefaults.getBool(forKey: .autoCheckVersion) {
+            menuController.checkV2rayUVersion()
             // check version
             V2rayUpdater.checkForUpdatesInBackground()
         }
 
+        _ = GeneratePACFile(rewrite: true)
         // start http server for pac
         V2rayLaunch.startHttpServer()
 
@@ -61,18 +56,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(onWakeNote(note:)), name: NSWorkspace.didWakeNotification, object: nil)
         // url scheme
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(self.handleAppleEvent(event:replyEvent:)), forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
-
-        let path = Bundle.main.bundlePath
-        // /Users/yanue/Library/Developer/Xcode/DerivedData/V2rayU-cqwhqdwsnxsplqgolfwfywalmjps/Build/Products/Debug
-        // working dir must be: /Applications/V2rayU.app
-        NSLog(String.init(format: "working dir:%@", path))
-
-        if !(path.contains("Developer/Xcode") || path.contains("/Applications/V2rayU.app")) {
-            makeToast(message: "Please drag 'V2rayU' to '/Applications' directory", displayDuration: 5.0)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.5) {
-                NSApplication.shared.terminate(self)
-            }
-        }
 
         // set global hotkey
         let notifyCenter = NotificationCenter.default
@@ -97,12 +80,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if UserDefaults.get(forKey: .autoCheckVersion) == nil {
             UserDefaults.setBool(forKey: .autoCheckVersion, value: true)
         }
+        if UserDefaults.get(forKey: .autoUpdateServers) == nil {
+            UserDefaults.setBool(forKey: .autoUpdateServers, value: true)
+        }
+        if UserDefaults.get(forKey: .autoSelectFastestServer) == nil {
+            UserDefaults.setBool(forKey: .autoSelectFastestServer, value: false)
+        }
         if UserDefaults.get(forKey: .autoLaunch) == nil {
             SMLoginItemSetEnabled(launcherAppIdentifier as CFString, true)
             UserDefaults.setBool(forKey: .autoLaunch, value: true)
         }
         if UserDefaults.get(forKey: .runMode) == nil {
-            UserDefaults.set(forKey: .runMode, value: RunMode.manual.rawValue)
+            UserDefaults.set(forKey: .runMode, value: RunMode.pac.rawValue)
+        }
+        if UserDefaults.get(forKey: .gfwPacFileContent) == nil {
+            let gfwlist = try? String(contentsOfFile: GFWListFilePath, encoding: String.Encoding.utf8)
+            UserDefaults.set(forKey: .gfwPacFileContent, value: gfwlist ?? "")
         }
         if V2rayServer.count() == 0 {
             // add default
@@ -125,24 +118,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func onWakeNote(note: NSNotification) {
         print("onWakeNote")
+        // reconnect
         if UserDefaults.getBool(forKey: .v2rayTurnOn) {
+            V2rayLaunch.Stop()
             V2rayLaunch.Start()
         }
         // check v2ray core
         V2rayCore().check()
         // auto check updates
         if UserDefaults.getBool(forKey: .autoCheckVersion) {
+            menuController.checkV2rayUVersion()
             // check version
             V2rayUpdater.checkForUpdatesInBackground()
         }
         // auto update subscribe servers
-        V2raySubSync().sync()
+        if UserDefaults.getBool(forKey: .autoUpdateServers) {
+            V2raySubSync().sync()
+        }
         // ping
-        menuController.pingAtLaunch()
+        PingSpeed().pingAll()
     }
 
     @objc func onSleepNote(note: NSNotification) {
-        V2rayLaunch.Stop()
+        print("onSleepNote")
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {

@@ -10,7 +10,7 @@ import Cocoa
 import Preferences
 import Alamofire
 
-let PACRulesDirPath = AppResourcesPath + "/pac/"
+let PACRulesDirPath = AppHomePath + "/pac/"
 let PACUserRuleFilePath = PACRulesDirPath + "user-rule.txt"
 let PACFilePath = PACRulesDirPath + "proxy.js"
 var PACUrl = "http://127.0.0.1:" + String(HttpServerPacPort) + "/pac/proxy.js"
@@ -80,9 +80,6 @@ final class PreferencePacViewController: NSViewController, PreferencePane {
             do {
                 // save user rules into UserDefaults
                 UserDefaults.set(forKey: .userRules, value: str)
-
-                try str.data(using: String.Encoding.utf8)?.write(to: URL(fileURLWithPath: PACUserRuleFilePath), options: .atomic)
-
                 UpdatePACFromGFWList(gfwPacListUrl: self.gfwPacListUrl.stringValue)
 
                 if GeneratePACFile(rewrite: true) {
@@ -119,6 +116,7 @@ final class PreferencePacViewController: NSViewController, PreferencePane {
 
                         // save to UserDefaults
                         UserDefaults.set(forKey: .gfwPacListUrl, value: gfwPacListUrl)
+                        UserDefaults.set(forKey: .gfwPacFileContent, value: v)
 
                         if GeneratePACFile(rewrite: true) {
                             // Popup a user notification
@@ -144,31 +142,24 @@ func GeneratePACFile(rewrite: Bool) -> Bool {
     let sockPort = UserDefaults.get(forKey: .localSockPort) ?? "1080"
 
     // permission
-    _ = shell(launchPath: "/bin/bash", arguments: ["-c", "cd " + AppResourcesPath + " && /bin/chmod -R 755 ./pac"])
+    _ = shell(launchPath: "/bin/bash", arguments: ["-c", "cd " + AppHomePath + " && /bin/chmod -R 755 ./pac"])
 
     // if PACFilePath exist and not need rewrite
-    if (!rewrite && FileManager.default.fileExists(atPath: PACFilePath)) {
+    if (!(rewrite || !FileManager.default.fileExists(atPath: PACFilePath))) {
         return true
     }
 
     print("GeneratePACFile rewrite", sockPort)
 
     do {
-        let gfwlist = try String(contentsOfFile: GFWListFilePath, encoding: String.Encoding.utf8)
+        let gfwlist = UserDefaults.get(forKey: .gfwPacFileContent) ?? ""
         if let data = Data(base64Encoded: gfwlist, options: .ignoreUnknownCharacters) {
             let str = String(data: data, encoding: String.Encoding.utf8)
             var lines = str!.components(separatedBy: CharacterSet.newlines)
-
-            // read userRules from UserDefaults
-            let userRules = UserDefaults.get(forKey: .userRules)
-            if userRules != nil {
-                try userRules!.data(using: String.Encoding.utf8)?.write(to: URL(fileURLWithPath: PACUserRuleFilePath), options: .atomic)
-            }
-
             do {
-                let userRuleStr = try String(contentsOfFile: PACUserRuleFilePath, encoding: String.Encoding.utf8)
-                let userRuleLines = userRuleStr.components(separatedBy: CharacterSet.newlines)
-
+                // read userRules from UserDefaults
+                let userRules = UserDefaults.get(forKey: .userRules) ?? ""
+                let userRuleLines = userRules.components(separatedBy: CharacterSet.newlines)
                 lines = userRuleLines + lines
             } catch {
                 NSLog("Not found user-rule.txt")

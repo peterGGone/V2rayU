@@ -16,6 +16,7 @@ struct V2rayTransport: Codable {
     var httpSettings: HttpSettings?
     var dsSettings: DsSettings?
     var quicSettings: QuicSettings?
+    var xtlsSettings: XtlsSettings?
 }
 
 struct V2rayStreamSettings: Codable {
@@ -32,6 +33,7 @@ struct V2rayStreamSettings: Codable {
     enum security: String, Codable {
         case none
         case tls
+        case xtls
     }
 
     var network: network = .tcp
@@ -44,6 +46,7 @@ struct V2rayStreamSettings: Codable {
     var httpSettings: HttpSettings?
     var dsSettings: DsSettings?
     var quicSettings: QuicSettings?
+    var xtlsSettings: XTlsSettings?
 }
 
 struct TlsSettings: Codable {
@@ -54,7 +57,37 @@ struct TlsSettings: Codable {
     var certificates: TlsCertificates?
 }
 
+struct XtlsSettings: Codable {
+    var serverName: String?
+    var alpn: String?
+    var allowInsecure: Bool?
+    var allowInsecureCiphers: Bool?
+    var certificates: TlsCertificates?
+}
+
 struct TlsCertificates: Codable {
+    enum usage: String, Codable {
+        case encipherment
+        case verify
+        case issue
+    }
+
+    var usage: usage? = .encipherment
+    var certificateFile: String?
+    var keyFile: String?
+    var certificate: String?
+    var key: String?
+}
+
+struct XTlsSettings: Codable {
+    var serverName: String?
+    var alpn: String?
+    var allowInsecure: Bool?
+    var allowInsecureCiphers: Bool?
+    var certificates: XTlsCertificates?
+}
+
+struct XTlsCertificates: Codable {
     enum usage: String, Codable {
         case encipherment
         case verify

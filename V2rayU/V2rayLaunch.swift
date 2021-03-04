@@ -9,24 +9,17 @@
 import Cocoa
 import SystemConfiguration
 import Alamofire
-import GCDWebServer
+import Swifter
 
-let LAUNCH_AGENT_DIR = "/Library/LaunchAgents/"
-let LAUNCH_AGENT_PLIST = "yanue.v2rayu.v2ray-core.plist"
-let LAUNCH_HTTP_PLIST = "yanue.v2rayu.http.plist" // simple http server
-let logFilePath = NSHomeDirectory() + "/Library/Logs/v2ray-core.log"
-let launchAgentDirPath = NSHomeDirectory() + LAUNCH_AGENT_DIR
-let launchAgentPlistFile = launchAgentDirPath + LAUNCH_AGENT_PLIST
-let launchHttpPlistFile = launchAgentDirPath + LAUNCH_HTTP_PLIST
+let LAUNCH_AGENT_NAME = "yanue.v2rayu.v2ray-core"
 let AppResourcesPath = Bundle.main.bundlePath + "/Contents/Resources"
-let v2rayCorePath = AppResourcesPath + "/v2ray-core"
+let AppHomePath = NSHomeDirectory() + "/.V2rayU"
+let v2rayCorePath = AppHomePath + "/v2ray-core"
 let v2rayCoreFile = v2rayCorePath + "/v2ray"
+let logFilePath = AppHomePath + "/v2ray-core.log"
 var HttpServerPacPort = UserDefaults.get(forKey: .localPacPort) ?? "11085"
-let cmdSh = AppResourcesPath + "/cmd.sh"
-let cmdAppleScript = "do shell script \"" + cmdSh + "\" with administrator privileges"
-let JsonConfigFilePath = AppResourcesPath + "/config.json"
-
-let webServer = GCDWebServer()
+let JsonConfigFilePath = AppHomePath + "/config.json"
+var webServer = HttpServer()
 
 enum RunMode: String {
     case global
@@ -38,7 +31,54 @@ enum RunMode: String {
 }
 
 class V2rayLaunch: NSObject {
+    static func install() {
+        // generate plist
+        V2rayLaunch.generateLaunchAgentPlist()
+
+        // Ensure launch agent directory is existed.
+        let fileMgr = FileManager.default
+        if !fileMgr.fileExists(atPath: AppHomePath) {
+            try! fileMgr.createDirectory(atPath: AppHomePath, withIntermediateDirectories: true, attributes: nil)
+        }
+
+        // make sure new version
+        print("install", AppResourcesPath)
+        var needRunInstall = false
+        if !FileManager.default.fileExists(atPath: v2rayCoreFile) {
+            print("app home dir not exists,need install")
+            needRunInstall = true
+        }
+
+        let launchKey = "launchedBefore-" + appVersion
+        let launchedBefore = UserDefaults.standard.bool(forKey: launchKey)
+        if !launchedBefore {
+            print("First launch, need install.")
+            UserDefaults.standard.set(true, forKey: launchKey)
+            needRunInstall = true
+        }
+
+        print("launchedBefore", launchedBefore, needRunInstall)
+        if !needRunInstall {
+            print("not install")
+            return
+        }
+
+        let doSh = "cd " + AppResourcesPath + " && sudo chown root:admin ./install.sh && sudo chmod a+rsx  ./install.sh && ./install.sh"
+        print("runAppleScript:" + doSh)
+        var error: NSDictionary?
+        if let scriptObject = NSAppleScript(source: "do shell script \"" + doSh + "\" with administrator privileges") {
+            let output: NSAppleEventDescriptor = scriptObject.executeAndReturnError(&error)
+            print(output.stringValue ?? "")
+            if (error != nil) {
+                print("error: \(String(describing: error))")
+            }
+        }
+    }
+
     static func generateLaunchAgentPlist() {
+        let launchAgentDirPath = NSHomeDirectory() + "/Library/LaunchAgents/"
+        let launchAgentPlistFile = launchAgentDirPath + LAUNCH_AGENT_NAME + ".plist"
+
         // Ensure launch agent directory is existed.
         let fileMgr = FileManager.default
         if !fileMgr.fileExists(atPath: launchAgentDirPath) {
@@ -46,42 +86,29 @@ class V2rayLaunch: NSObject {
         }
 
         // write launch agent
-        let agentArguments = ["./v2ray-core/v2ray", "-config", JsonConfigFilePath]
+        let agentArguments = ["./v2ray-core/v2ray", "-config", "config.json"]
 
         let dictAgent: NSMutableDictionary = [
-            "Label": LAUNCH_AGENT_PLIST.replacingOccurrences(of: ".plist", with: ""),
-            "WorkingDirectory": AppResourcesPath,
+            "Label": LAUNCH_AGENT_NAME,
+            "WorkingDirectory": AppHomePath,
             "StandardOutPath": logFilePath,
             "StandardErrorPath": logFilePath,
             "ProgramArguments": agentArguments,
-            "KeepAlive": true,
-            "RunAtLoad": true,
+            "KeepAlive": false,
         ]
 
         dictAgent.write(toFile: launchAgentPlistFile, atomically: true)
-
-        // if old launchHttpPlistFile exist
-        if fileMgr.fileExists(atPath: launchHttpPlistFile) {
-            print("launchHttpPlistFile exist", launchHttpPlistFile)
-            _ = shell(launchPath: "/bin/launchctl", arguments: ["unload", launchHttpPlistFile])
-            try! fileMgr.removeItem(atPath: launchHttpPlistFile)
-        }
-
-        // permission
-        _ = shell(launchPath: "/bin/bash", arguments: ["-c", "cd " + AppResourcesPath + " && /bin/chmod -R 755 ."])
+        // load launch service
+        Process.launchedProcess(launchPath: "/bin/launchctl", arguments: ["load", "-wF", launchAgentPlistFile])
     }
 
     static func Start() {
-        // permission: make v2ray execable
-        // ~/LaunchAgents/yanue.v2rayu.v2ray-core.plist
-        _ = shell(launchPath: "/bin/bash", arguments: ["-c", "cd " + AppResourcesPath + " && /bin/chmod -R 755 ./v2ray-core"])
-
-        self.startHttpServer()
+        // start http server
+        startHttpServer()
 
         // unload first
-        _ = shell(launchPath: "/bin/launchctl", arguments: ["unload", launchAgentPlistFile])
-
-        let task = Process.launchedProcess(launchPath: "/bin/launchctl", arguments: ["load", "-wF", launchAgentPlistFile])
+        _ = shell(launchPath: "/bin/launchctl", arguments: ["stop", LAUNCH_AGENT_NAME])
+        let task = Process.launchedProcess(launchPath: "/bin/launchctl", arguments: ["start", LAUNCH_AGENT_NAME])
         task.waitUntilExit()
         if task.terminationStatus == 0 {
             NSLog("Start v2ray-core succeeded.")
@@ -91,19 +118,16 @@ class V2rayLaunch: NSObject {
     }
 
     static func Stop() {
-        _ = shell(launchPath: "/bin/launchctl", arguments: ["unload", launchHttpPlistFile])
+        // stop pac server
+        webServer.stop()
 
-        // cmd: /bin/launchctl unload /Library/LaunchAgents/yanue.v2rayu.v2ray-core.plist
-        let task = Process.launchedProcess(launchPath: "/bin/launchctl", arguments: ["unload", launchAgentPlistFile])
+        let task = Process.launchedProcess(launchPath: "/bin/launchctl", arguments: ["stop", LAUNCH_AGENT_NAME])
         task.waitUntilExit()
         if task.terminationStatus == 0 {
             NSLog("Stop v2ray-core succeeded.")
         } else {
             NSLog("Stop v2ray-core failed.")
         }
-
-        // stop http server
-        webServer.stop()
     }
 
     static func OpenLogs() {
@@ -126,33 +150,8 @@ class V2rayLaunch: NSObject {
         try! txt.write(to: URL.init(fileURLWithPath: logFilePath), atomically: true, encoding: String.Encoding.utf8)
     }
 
-    static func chmodCmdPermission() {
-        // Ensure launch agent directory is existed.
-        if !FileManager.default.fileExists(atPath: cmdSh) {
-            return
-        }
-
-        let res = shell(launchPath: "/bin/bash", arguments: ["-c", "cd " + AppResourcesPath + " && ls -la ./V2rayUTool | awk '{print $3,$4}'"])
-        NSLog("Permission is " + (res ?? ""))
-        if res == "root admin" {
-            NSLog("Permission is ok")
-            return
-        }
-
-        var error: NSDictionary?
-        if let scriptObject = NSAppleScript(source: cmdAppleScript) {
-            let output: NSAppleEventDescriptor = scriptObject.executeAndReturnError(&error)
-            print(output.stringValue ?? "")
-            if (error != nil) {
-                print("error: \(String(describing: error))")
-            }
-        } else {
-            print("error scriptObject")
-        }
-    }
-
     static func setSystemProxy(mode: RunMode, httpPort: String = "", sockPort: String = "") {
-        let task = Process.launchedProcess(launchPath: AppResourcesPath + "/V2rayUTool", arguments: ["-mode", mode.rawValue, "-pac-url", PACUrl, "-http-port", httpPort, "-sock-port", sockPort])
+        let task = Process.launchedProcess(launchPath: AppHomePath + "/V2rayUTool", arguments: ["-mode", mode.rawValue, "-pac-url", PACUrl, "-http-port", httpPort, "-sock-port", sockPort])
         task.waitUntilExit()
         if task.terminationStatus == 0 {
             NSLog("setSystemProxy " + mode.rawValue + " succeeded.")
@@ -164,22 +163,78 @@ class V2rayLaunch: NSObject {
     // start http server for pac
     static func startHttpServer() {
         do {
-            if webServer.isRunning {
-                try webServer.stop()
-            }
+            // stop first
+            webServer.stop()
 
-            _ = GeneratePACFile(rewrite: false)
+            // then new HttpServer
+            webServer = HttpServer()
+            webServer["/:path"] = shareFilesFromDirectory(AppHomePath)
+            webServer["/pac/:path"] = shareFilesFromDirectory(AppHomePath + "/pac")
 
-            let pacPort = UserDefaults.get(forKey: .localPacPort) ?? "11085"
-
-            webServer.addGETHandler(forBasePath: "/", directoryPath: AppResourcesPath, indexFilename: nil, cacheAge: 0, allowRangeRequests: true)
-
-            try webServer.start(options: [
-                "Port": UInt(pacPort) ?? 11085,
-                "BindToLocalhost": true
-            ]);
+            let pacPort = UInt16(UserDefaults.get(forKey: .localPacPort) ?? "11085") ?? 11085
+            try webServer.start(pacPort)
+            print("webServer.start at:\(pacPort)")
         } catch let error {
-            print("webServer.start:\(error)")
+            print("webServer.start error:\(error)")
         }
+    }
+
+    static func checkPorts() -> Bool {
+        return true
+        // stop old v2ray process
+        self.Stop()
+        // stop pac server
+        webServer.stop()
+
+        let localSockPort = UserDefaults.get(forKey: .localSockPort) ?? "1080"
+        let localSockHost = UserDefaults.get(forKey: .localSockHost) ?? "127.0.0.1"
+        let localHttpPort = UserDefaults.get(forKey: .localHttpPort) ?? "1087"
+        let localHttpHost = UserDefaults.get(forKey: .localHttpHost) ?? "127.0.0.1"
+        let localPacPort = UserDefaults.get(forKey: .localPacPort) ?? "11085"
+
+        // check same port
+        if localSockPort == localHttpPort {
+            makeToast(message: "the ports (sock,http) cannot be the same: " + localHttpPort)
+            return false
+        }
+
+        if localHttpPort == localPacPort {
+            makeToast(message: "the ports (http,pac) cannot be the same:" + localPacPort)
+            return false
+        }
+
+        if localSockPort == localPacPort {
+            makeToast(message: "the ports (sock,pac) cannot be the same:" + localPacPort)
+            return false
+        }
+
+        // check port is used
+        if !self.checkPort(host: localSockHost, port: localSockPort, tip: "socks") {
+            return false
+        }
+
+        if !self.checkPort(host: localHttpHost, port: localHttpPort, tip: "http") {
+            return false
+        }
+
+        if !self.checkPort(host: "0.0.0.0", port: localPacPort, tip: "pac") {
+            return false
+        }
+
+        return true
+    }
+
+    static func checkPort(host: String, port: String, tip: String) -> Bool {
+        // shell("/bin/bash",["-c","cd ~ && ls -la"])
+        let cmd = "cd " + AppHomePath + " && chmod +x ./V2rayUHelper && ./V2rayUHelper -cmd port -h " + host + " -p " + port
+        let res = shell(launchPath: "/bin/bash", arguments: ["-c", cmd])
+
+        NSLog("checkPort: res=(\(String(describing: res))) cmd=(\(cmd))")
+
+        if res != "ok" {
+            makeToast(message: tip + " error - " + (res ?? ""), displayDuration: 5)
+            return false
+        }
+        return true
     }
 }
